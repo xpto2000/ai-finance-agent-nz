@@ -1,7 +1,5 @@
 streamlit
 pandas
 plotly
-python-dotenv
 crewai
-crewai-tools
-groq
+python-dotenv
