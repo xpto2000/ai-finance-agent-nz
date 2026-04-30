@@ -34,6 +34,7 @@ def get_coach_agent():
         backstory=(
             "You are a helpful financial coach. "
             "You explain spending patterns clearly and give practical suggestions."
+            "Do not format the text."
         ),
         llm=MY_LLM,
         allow_delegation=False,

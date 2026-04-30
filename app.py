@@ -1,12 +1,30 @@
+# ------------------------------------------------------------
+# Standard + third-party imports
+# ------------------------------------------------------------
+# html: safely render text in UI (used for summaries if needed)
+# json + re: used to extract structured JSON from AI responses
 import html
 import json
 import re
 
+# Data processing + visualisation
 import pandas as pd
 import plotly.express as px
+
+# Streamlit = UI framework
 import streamlit as st
+
+# CrewAI = agent orchestration (LLM tasks)
 from crewai import Crew, Task
 
+
+# ------------------------------------------------------------
+# Internal modules (your project logic)
+# ------------------------------------------------------------
+# agents: defines AI roles (analyst + coach)
+# classification_rules: builds prompt for AI classification
+# example_files_disclaimer: disclaimer + sample CSVs
+# processor: merges and cleans uploaded CSV files
 from agents import get_analyst_agent, get_coach_agent
 from classification_rules import NZ_CATEGORIES, build_classification_prompt
 from example_files_disclaimer import (
@@ -17,6 +35,9 @@ from example_files_disclaimer import (
 from processor import merge_bank_files
 
 
+# ------------------------------------------------------------
+# Streamlit page setup
+# ------------------------------------------------------------
 st.set_page_config(
     page_title="AI Finance Agent NZ",
     page_icon="💸",
@@ -25,16 +46,21 @@ st.set_page_config(
 
 st.title("💸 AI Finance Agent NZ")
 
+# Show disclaimer at the top so users understand limitations
 st.warning(DISCLAIMER_TEXT)
 
 st.write("Upload your NZ bank CSV files to categorise money in and money out.")
 
+
+# ------------------------------------------------------------
+# Example CSV downloads (helps users understand format)
+# ------------------------------------------------------------
 st.subheader("Example CSV files")
 
 example_csvs = get_example_csvs()
-
 cols = st.columns(len(example_csvs))
 
+# Create a download button for each example file
 for col, (filename, df) in zip(cols, example_csvs.items()):
     with col:
         st.download_button(
@@ -45,6 +71,9 @@ for col, (filename, df) in zip(cols, example_csvs.items()):
         )
 
 
+# ------------------------------------------------------------
+# File uploader (main input from user)
+# ------------------------------------------------------------
 uploaded_files = st.file_uploader(
     "Upload bank CSV files",
     type=["csv"],
@@ -52,83 +81,67 @@ uploaded_files = st.file_uploader(
 )
 
 
+# ------------------------------------------------------------
+# Helper: safely extract JSON from AI output
+# AI sometimes returns extra text → we extract the JSON block
+# ------------------------------------------------------------
 def extract_json_from_text(text):
     try:
         return json.loads(text)
     except Exception:
-        pass
-
-    match = re.search(r"\[.*\]", str(text), re.DOTALL)
-    if match:
-        try:
+        match = re.search(r"\[.*\]", str(text), re.DOTALL)
+        if match:
             return json.loads(match.group(0))
-        except Exception:
-            pass
-
     return None
 
 
-def clean_summary_text(text):
-    text = str(text)
-    text = text.replace("###", "")
-    text = text.replace("##", "")
-    text = text.replace("#", "")
-    text = text.replace("**", "")
-    text = text.replace("*", "")
-    text = text.replace("_", "")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def display_summary_card(summary_text):
-    safe_text = html.escape(summary_text)
-    summary_html = safe_text.replace("\n", "<br>")
-
-    st.markdown(
-        f"""
-        <div style="
-            background-color: white;
-            color: #111;
-            padding: 22px;
-            border-radius: 12px;
-            border: 1px solid #ddd;
-            font-size: 16px;
-            line-height: 1.6;
-            font-family: Arial, sans-serif;
-            margin-top: 10px;
-            margin-bottom: 20px;
-        ">
-            {summary_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
+# ------------------------------------------------------------
+# Helper: format NZD currency nicely
+# ------------------------------------------------------------
 def format_nzd(value):
     return f"NZ${value:,.2f}"
 
 
+# ------------------------------------------------------------
+# Main logic (runs only after files are uploaded)
+# ------------------------------------------------------------
 if uploaded_files:
+
+    # Merge multiple CSVs into one clean dataset
     combined_data = merge_bank_files(uploaded_files)
 
+    # Stop execution if no valid data
     if combined_data is None or combined_data.empty:
         st.error("No valid transactions found.")
         st.stop()
 
+    # Ensure amount column is numeric
     combined_data["amount"] = pd.to_numeric(combined_data["amount"], errors="coerce")
+
+    # Drop invalid rows and reset index
     combined_data = combined_data.dropna(subset=["amount"]).reset_index(drop=True)
+
+    # Create unique ID per transaction (used for AI mapping)
     combined_data["transaction_id"] = combined_data.index
 
+    # Display raw combined transactions
     st.subheader("Combined Transactions")
     st.dataframe(combined_data, use_container_width=True)
 
-    if st.button("Analyse Spending"):
-        analyst = get_analyst_agent()
-        coach = get_coach_agent()
 
+    # --------------------------------------------------------
+    # Run analysis when button is clicked
+    # --------------------------------------------------------
+    if st.button("Analyse Spending"):
+
+        # Create AI agents
+        analyst = get_analyst_agent()   # classification agent
+        coach = get_coach_agent()       # summary/advice agent
+
+        # Select relevant columns to send to AI
         columns_to_send = ["transaction_id", "date", "amount"]
 
+        # Dynamically include optional fields (depends on bank CSV format)
         for col in [
             "description",
             "details",
@@ -145,124 +158,169 @@ if uploaded_files:
 
         classification_input = combined_data[columns_to_send]
 
+
+        # ----------------------------------------------------
+        # Task 1: AI classification of transactions
+        # ----------------------------------------------------
         task1 = Task(
             description=build_classification_prompt(classification_input),
             agent=analyst,
-            expected_output="Valid JSON classification.",
+            expected_output="Valid JSON classification of transactions.",
         )
 
+        # Create crew (agent + task)
         crew1 = Crew(
             agents=[analyst],
             tasks=[task1],
             verbose=True,
         )
 
-        with st.spinner("Classifying with AI..."):
+        # Run classification
+        with st.spinner("Classifying transactions with AI..."):
             result1 = crew1.kickoff()
 
-        category_json = None
+        # Extract JSON from AI output
+        category_json = extract_json_from_text(result1.tasks_output[0].raw)
 
-        try:
-            category_json = result1.tasks_output[0].json_dict
-        except Exception:
-            pass
-
-        if not category_json:
-            category_json = extract_json_from_text(result1.tasks_output[0].raw)
-
+        # Fail safely if AI output is invalid
         if not category_json:
             st.error("AI classification failed.")
             st.stop()
 
-        df_map = pd.DataFrame(category_json)
+        # Map AI output back to dataframe using transaction_id
+        ai_map = {
+            item["transaction_id"]: item["category"]
+            for item in category_json
+        }
 
-        df_map["transaction_id"] = pd.to_numeric(df_map["transaction_id"], errors="coerce")
-        df_map = df_map.dropna(subset=["transaction_id"])
-        df_map["transaction_id"] = df_map["transaction_id"].astype(int)
+        combined_data["category"] = combined_data["transaction_id"].map(ai_map)
 
-        df_map = df_map[df_map["category"].isin(NZ_CATEGORIES)]
-
-        mapping = dict(zip(df_map["transaction_id"], df_map["category"]))
-
-        combined_data["category"] = combined_data["transaction_id"].map(mapping)
-
+        # Fallback for any missing classifications
         combined_data["category"] = combined_data.apply(
-            lambda r: r["category"]
-            if pd.notna(r["category"])
-            else ("Other Income" if r["amount"] > 0 else "Other Expense"),
+            lambda row: row["category"]
+            if pd.notna(row["category"])
+            else ("Other Income" if row["amount"] > 0 else "Other Expense"),
             axis=1,
         )
 
-        money_in = combined_data[combined_data["amount"] > 0]
-        money_out = combined_data[combined_data["amount"] < 0].copy()
-        money_out["amount_abs"] = money_out["amount"].abs()
 
-        total_in = money_in["amount"].sum()
-        total_out = money_out["amount_abs"].sum()
-        net = total_in - total_out
+        # ----------------------------------------------------
+        # Split money in vs money out
+        # ----------------------------------------------------
+        money_in_df = combined_data[combined_data["amount"] > 0].copy()
+        money_out_df = combined_data[combined_data["amount"] < 0].copy()
 
+        # Convert expenses to positive for aggregation
+        money_out_df["amount_abs"] = money_out_df["amount"].abs()
+
+        # Calculate totals
+        total_in = money_in_df["amount"].sum()
+        total_out = money_out_df["amount_abs"].sum()
+        net_position = total_in - total_out
+
+
+        # ----------------------------------------------------
+        # Display summary metrics
+        # ----------------------------------------------------
         st.divider()
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total In", format_nzd(total_in))
-        c2.metric("Total Out", format_nzd(total_out))
-        c3.metric("Net", format_nzd(net))
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Money In", format_nzd(total_in))
+        col2.metric("Total Money Out", format_nzd(total_out))
+        col3.metric("Net Position", format_nzd(net_position))
 
+
+        # ----------------------------------------------------
+        # Charts (Money In vs Money Out breakdown)
+        # ----------------------------------------------------
         st.divider()
 
-        col1, col2 = st.columns(2)
+        chart_col1, chart_col2 = st.columns(2)
 
-        with col1:
-            if not money_in.empty:
-                s = money_in.groupby("category", as_index=False)["amount"].sum()
-                fig = px.pie(s, values="amount", names="category", hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
+        # Money IN chart
+        with chart_col1:
+            st.subheader("💰 Money In")
 
-        with col2:
-            if not money_out.empty:
-                s = money_out.groupby("category", as_index=False)["amount_abs"].sum()
-                fig = px.pie(s, values="amount_abs", names="category", hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
+            if not money_in_df.empty:
+                money_in_summary = (
+                    money_in_df.groupby("category", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
 
+                fig_in = px.pie(
+                    money_in_summary,
+                    values="amount",
+                    names="category",
+                    hole=0.4,
+                )
+
+                st.plotly_chart(fig_in, use_container_width=True)
+
+        # Money OUT chart
+        with chart_col2:
+            st.subheader("💸 Money Out")
+
+            if not money_out_df.empty:
+                money_out_summary = (
+                    money_out_df.groupby("category", as_index=False)["amount_abs"]
+                    .sum()
+                    .sort_values("amount_abs", ascending=False)
+                )
+
+                fig_out = px.pie(
+                    money_out_summary,
+                    values="amount_abs",
+                    names="category",
+                    hole=0.4,
+                )
+
+                st.plotly_chart(fig_out, use_container_width=True)
+
+
+        # ----------------------------------------------------
+        # Show final categorised transactions
+        # ----------------------------------------------------
         st.subheader("Categorised Transactions")
         st.dataframe(combined_data, use_container_width=True)
+
+
+        # ----------------------------------------------------
+        # Task 2: AI financial summary / coaching
+        # ----------------------------------------------------
         task2 = Task(
             description=(
-                "Write a warm, practical financial summary for a New Zealand user.\n\n"
-                "Tone:\n"
-                "- Encouraging, calm, and human.\n"
-                "- Do not shame the user.\n"
-                "- Do not say things like 'your numbers look bad'.\n"
-                "- Do not give generic advice like 'consider saving more' unless it is tied to the actual data.\n"
-                "- Be specific and useful.\n\n"
-                "Content:\n"
-                "- Start with a short plain-English overview of what happened.\n"
-                "- Mention one or two positive observations if possible.\n"
-                "- Point out the biggest spending areas gently.\n"
-                "- Suggest realistic next actions the user could take this month.\n"
-                "- Use New Zealand English and NZD context.\n"
-                "- Do not provide investment, tax, mortgage, insurance, or legal advice.\n"
-                "- Feel free to recommend free resources when appropriate.\n"
-                "- Do not recommend specific financial products.\n"
-                "- If possible provide at least one actionable tip and 5 recommendations.\n"
-                "- Do not use markdown, bold, italics, or tables.\n"
-                "- Use simple numbered points only.\n\n"
+                "Write a warm, practical financial summary for a New Zealand user.\n"
+                "Be encouraging and realistic.\n"
+                "Give useful next steps without judgement.\n\n"
+                "Return plain text only.\n"
+                "Do not use markdown, asterisks, underscores, headings, or special formatting.\n"
+                "Write full readable sentences only.\n"
                 f"Total money in: {format_nzd(total_in)}\n"
                 f"Total money out: {format_nzd(total_out)}\n"
-                f"Net position: {format_nzd(net)}\n\n"
-                f"Money in by category:\n{money_in.groupby('category', as_index=False)['amount'].sum().to_string(index=False)}\n\n"
-                f"Money out by category:\n{money_out.groupby('category', as_index=False)['amount_abs'].sum().sort_values(by='amount_abs', ascending=False).to_string(index=False)}"
+                f"Net position: {format_nzd(net_position)}"
             ),
             agent=coach,
-            expected_output="A warm, practical NZ-focused financial summary with realistic suggestions.",
+            expected_output="Helpful financial suggestions.",
         )
-        crew2 = Crew(agents=[coach], tasks=[task2])
 
-        result2 = crew2.kickoff()
+        crew2 = Crew(
+            agents=[coach],
+            tasks=[task2],
+            verbose=True,
+        )
+
+        # Generate summary
+        with st.spinner("Generating financial summary..."):
+            result2 = crew2.kickoff()
 
         st.subheader("💬 Financial Summary")
-        summary = clean_summary_text(result2.tasks_output[0].raw)
-        display_summary_card(summary)
+        summary_text = clean_summary_text(result2.tasks_output[0].raw)
+        st.text(summary_text)
 
+
+# ------------------------------------------------------------
+# Default state (before any files are uploaded)
+# ------------------------------------------------------------
 else:
     st.info("Upload CSV files to begin.")
