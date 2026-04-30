@@ -101,6 +101,20 @@ def extract_json_from_text(text):
 def format_nzd(value):
     return f"NZ${value:,.2f}"
 
+def clean_summary_text(text):
+    text = str(text)
+
+    # Fix numbers like "5 , 070 . 45"
+    text = re.sub(r'(\d)\s*,\s*(\d)', r'\1,\2', text)
+    text = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', text)
+
+    # Fix currency spacing: "N Z $ 5,000" → "NZ$5,000"
+    text = re.sub(r'N\s*Z\s*\$\s*', 'NZ$', text)
+
+    # Collapse multiple spaces (but keep normal spacing)
+    text = re.sub(r'\s{2,}', ' ', text)
+
+    return text.strip()
 
 # ------------------------------------------------------------
 # Main logic (runs only after files are uploaded)
