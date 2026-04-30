@@ -304,15 +304,21 @@ if uploaded_files:
         # ----------------------------------------------------
         task2 = Task(
             description=(
-                "Write a warm, practical financial summary for a New Zealand user.\n"
+                "Write a warm, clear, structured, practical financial summary for a New Zealand user.\n"
                 "Be encouraging and realistic.\n"
                 "Give useful next steps without judgement.\n\n"
-                "Return plain text only.\n"
-                "Do not use markdown, asterisks, underscores, headings, or special formatting.\n"
-                "Write full readable sentences only.\n"
-                f"Total money in: {format_nzd(total_in)}\n"
-                f"Total money out: {format_nzd(total_out)}\n"
-                f"Net position: {format_nzd(net_position)}"
+                "Formatting rules:\n"
+                "- Use short paragraphs\n"
+                "- Use bullet points for suggestions\n"
+                "- Use simple emojis for sections (e.g. 💡 📊 💰)\n"
+                "- Do NOT use asterisks, underscores, or markdown formatting like bold/italic\n"
+                "- Do NOT break words or numbers\n"
+                "- Check all text before sending to make sure everything is clean, following the formatting rules, and readable\n\n"
+                "Structure:\n"
+                "1. Short positive opening\n"
+                "2. Summary of numbers\n"
+                "3. 2 or 3 key insights (bullet points)\n"
+                "4. 2 or 3 practical actions (bullet points)\n"
             ),
             agent=coach,
             expected_output="Helpful financial suggestions.",
@@ -330,7 +336,7 @@ if uploaded_files:
 
         st.subheader("💬 Financial Summary")
         summary_text = clean_summary_text(result2.tasks_output[0].raw)
-        st.text(summary_text)
+        st.markdown(summary_text)
 
 
 # ------------------------------------------------------------
