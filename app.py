@@ -334,7 +334,7 @@ if uploaded_files:
         with st.spinner("Generating financial summary..."):
             result2 = crew2.kickoff()
 
-        st.subheader("💬 Financial Summary")
+        st.subheader("💬 Your Financial Summary")
         summary_text = clean_summary_text(result2.tasks_output[0].raw)
         st.markdown(summary_text)
 
